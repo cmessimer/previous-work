@@ -1,0 +1,409 @@
+name: Instance Refresh
+run-name: ${{ inputs.environment-tag}} P${{ inputs.pod-id }} ${{ inputs.oseries-usage }} ${{ inputs.region }} ref:${{ github.ref_name }} Instance Refresh
+on:
+  workflow_dispatch:
+    inputs:
+      environment-tag:
+        description: "The AWS resource Environment tags to operate on."
+        required: true
+        type: choice
+        default: Development
+        options:
+          - Development
+          - QA
+          - Stage
+          - Production
+          - Customer Support
+          - Disaster Recovery
+      region:
+        required: true
+        type: choice
+        default: us-east-1
+        options:
+          - us-east-1
+          #- us-east-2
+          #- us-west-2
+      pod-id:
+        description: "The AWS resource OSeriesPodId tags to operate on."
+        # TODO: allow passing 'all'
+        required: true
+        type: string
+      oseries-usage:
+        description: "The AWS resource OSeriesUsage tags to operate on."
+        required: true
+        type: choice
+        default: WindowsServices
+        options:
+          - WindowsServices
+          - BCI
+          # - Calculation
+          # - Configuration
+  workflow_call:
+    inputs:
+      repo-checkout-ref:
+        description: "The branch or tag targeted in vcd-immutable-oseries repo, leave blank with workflow_dispatch."
+        required: true
+        type: string
+      environment-tag:
+        description: "The AWS resource Environment tags to operate on."
+        required: true
+        type: string
+      region:
+        required: true
+        type: string
+        default: "us-east-1"
+      pod-id:
+        description: "The AWS resource OSeriesPodId tags to operate on."
+        # TODO: allow passing 'all'
+        required: true
+        type: string
+      oseries-usage:
+        description: "The AWS resource OSeriesUsage tags to operate on."
+        required: true
+        type: string
+env:
+  CHECKOUT_REF: ${{ inputs.repo-checkout-ref || github.ref  }}
+  CHECKOUT_REPO: "vertexinc/vcd-immutable-oseries"
+  CHECKOUT_PATH: "vcd-immutable-oseries"
+  CHECKOUT_TOKEN: ${{ secrets.ORG_LEVEL_ACTION_PAT }}
+jobs:
+  get_config: # TODO: determine if pulling environment.json is really needed.. instead just pass the correct tag name directly into this workflow?
+    if: inputs.oseries-usage != '' && inputs.oseries-usage != 'false' && inputs.oseries-usage != 'False' && inputs.oseries-usage != false && (inputs.oseries-usage == 'WindowsServices' || inputs.oseries-usage == 'BCI' || inputs.oseries-usage == 'Calculation' || inputs.oseries-usage == 'Configuration')
+    name: Set Config
+    runs-on: [self-hosted, Linux, Standard, X64]
+    # NOTE: Cannot update to new container until we resolve `GLIBC_2.27' not found
+    # container:
+    #   image: docker.binrepo.vtxdev.net/cloud-base-images/immutable-build:latest
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      json_config: ${{ steps.set-config.outputs.json_config}}
+      env_tag: ${{ steps.set-config.outputs.env_tag}}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+        with:
+          fetch-depth: 2
+          ref: ${{ env.CHECKOUT_REF }}
+          repository: ${{ env.CHECKOUT_REPO }}
+          token: ${{ env.CHECKOUT_TOKEN }}
+      - name: Set Json Config
+        id: set-config
+        run: |
+          declare -A envtag_envpath=( ["Development"]="development" \
+          ["QA"]="qa" \
+          ["Stage"]="stage" \
+          ["Production"]="production" \
+          ["Disaster Recovery"]="recovery" \
+          ["Customer Support"]="customersupport" \
+          )
+
+          env_tag="${{ inputs.environment-tag}}"
+          env_json_path="config/${envtag_envpath[$env_tag]}/environment.json"
+          jsonConfig=$(jq '.' -c $env_json_path)
+
+          echo json_config=$jsonConfig >> $GITHUB_OUTPUT
+          echo env_tag=$env_tag >> $GITHUB_OUTPUT
+  parse_inputs:
+    name: Parse Inputs
+    needs: [get_config]
+    runs-on: [self-hosted, Linux, Standard, X64]
+    # NOTE: Cannot update to new container until we resolve `GLIBC_2.27' not found
+    # container:
+    #   image: docker.binrepo.vtxdev.net/cloud-base-images/immutable-build:latest
+    outputs:
+      env_tag: ${{ steps.parse_inputs.outputs.env_tag}}
+      region: ${{ steps.parse_inputs.outputs.region}}
+      oseries_usage: ${{ steps.parse_inputs.outputs.oseries_usage}}
+      role_arn: ${{ steps.parse_inputs.outputs.role_arn}}
+      pod_id: ${{ steps.parse_inputs.outputs.pod_id}}
+
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Parse Inputs
+        id: parse_inputs
+        run: |
+          echo "${{ github.event_name }} event"
+          repo_checkout_ref="${{ inputs.repo-checkout-ref }}"
+          env_tag="${{ needs.get_config.outputs.env_tag }}"
+          region="${{ inputs.region }}"
+          oseries_usage="${{ inputs.oseries-usage }}"
+          pod_id="${{ inputs.pod-id }}"
+          echo 'Selected inputs:'
+          echo "Env Tag: $env_tag"
+          echo "Region: $region"
+          echo "Usage: $oseries_usage"
+
+          jsonConfig='${{ needs.get_config.outputs.json_config }}'
+
+          account_id=$(echo $jsonConfig | jq -r '.AccountId')
+          echo "Account Id: $account_id"
+
+          role_arn="arn:aws:iam::$account_id:role/vtx-GitHubActions"
+          echo "GHA Role Arn: $role_arn"
+
+          echo "Pod Id: $pod_id"
+
+          echo "CHECKOUT_REF: ${{ env.CHECKOUT_REF }}
+          echo "CHECKOUT_REPO: ${{ env.CHECKOUT_REPO }}
+          echo "CHECKOUT_PATH: ${{ env.CHECKOUT_PATH }}
+          echo "CHECKOUT_TOKEN: ${{ env.CHECKOUT_TOKEN }}
+
+          echo env_tag=$env_tag >> $GITHUB_OUTPUT
+          echo region=$region >> $GITHUB_OUTPUT
+          echo oseries_usage=$oseries_usage >> $GITHUB_OUTPUT
+          echo role_arn=$role_arn >> $GITHUB_OUTPUT
+          echo pod_id=$pod_id >> $GITHUB_OUTPUT
+  context:
+    needs: [get_config, parse_inputs]
+    runs-on: [self-hosted, Linux, Standard, X64]
+    # NOTE: Cannot update to new container until we resolve `GLIBC_2.27' not found
+    # container:
+    #   image: docker.binrepo.vtxdev.net/cloud-base-images/immutable-build:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+        with:
+          ref: ${{ needs.initial.outputs.ref }}
+          fetch-depth: 1
+
+      - name: Dump Github Context # https://docs.github.com/en/actions/learn-github-actions/contexts
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: printf '%s\n' "$GITHUB_CONTEXT"
+
+      - name: Dump Env Context
+        env:
+          ENV_CONTEXT: ${{ toJson(env) }}
+        run: printf '%s\n' "$ENV_CONTEXT"
+
+      - name: Dump Vars Context
+        env:
+          VARS_CONTEXT: ${{ toJson(vars) }}
+        run: printf '%s\n' "$VARS_CONTEXT"
+
+      - name: Dump Job Context
+        env:
+          JOB_CONTEXT: ${{ toJson(job) }}
+        run: printf '%s\n' "$JOB_CONTEXT"
+
+      # # The jobs context is only available in reusable workflows, and can only be used to set outputs for a reusable workflow.
+      # - name: Dump Jobs Context
+      #   env:
+      #     JOBS_CONTEXT: ${{ toJson(jobs) }}
+      #   run: printf '%s\n' "$JOBS_CONTEXT"
+
+      - name: Dump Steps Context
+        env:
+          STEPS_CONTEXT: ${{ toJson(steps) }}
+        run: printf '%s\n' "$STEPS_CONTEXT"
+
+      - name: Dump Runner Context
+        env:
+          RUNNER_CONTEXT: ${{ toJson(runner) }}
+        run: printf '%s\n' "$RUNNER_CONTEXT"
+
+      # # For Debug only (Secrets should be stars, but will probably name all secrets.)
+      # - name: Dump Secrets Context
+      #   env:
+      #     SECRETS_CONTEXT: ${{ toJson(secrets) }}
+      #   run: printf '%s\n' "$SECRETS_CONTEXT"
+
+      # - name: Dump Strategy Context
+      #   env:
+      #     STRATEGY_CONTEXT: ${{ toJson(strategy) }}
+      #   run: printf '%s\n' "$STRATEGY_CONTEXT"
+
+      # - name: Dump Matrix Context
+      #   env:
+      #     MATRIX_CONTEXT: ${{ toJson(matrix) }}
+      #   run: printf '%s\n' "$MATRIX_CONTEXT"
+
+      - name: Dump Needs Context
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: printf '%s\n' "$NEEDS_CONTEXT"
+
+      - name: Show Default Environment Variables
+        run: |
+          echo "The job_id is: $GITHUB_JOB"   # reference the default environment variables
+          echo "The id of this action is: $GITHUB_ACTION"   # reference the default environment variables
+          echo "The run id is: $GITHUB_RUN_ID"
+          echo "The GitHub Actor's username is: $GITHUB_ACTOR"
+          echo "GitHub SHA: $GITHUB_SHA"
+  gather_asg_data:
+    name: Gather ASG Data
+    needs: [parse_inputs]
+    runs-on: [self-hosted, Linux, Standard, X64]
+    # NOTE: Cannot update to new container until we resolve `GLIBC_2.27' not found
+    # container:
+    #   image: docker.binrepo.vtxdev.net/cloud-base-images/immutable-build:latest
+    outputs:
+      json_asg_names: ${{ steps.get_asg_data.outputs.json_asg_names }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install AWS CLI v2
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          rm /tmp/awscliv2.zip
+          sudo /tmp/aws/install --update
+          rm -rf /tmp/aws/
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4.0.2
+        with:
+          aws-region: ${{ needs.parse_inputs.outputs.region }}
+          role-external-id: ${{ secrets.ORG_RUNNER_AWS_EXTERNALID }}
+          role-skip-session-tagging: true
+          role-session-name: asg-gather
+          role-to-assume: ${{ needs.parse_inputs.outputs.role_arn }}
+          role-duration-seconds: 3600
+
+      - name: Check Token Expiry
+        run: aws sts get-caller-identity
+
+      - name: Get ASG Data with Tags in PowerShell
+        id: get_asg_data
+        shell: pwsh
+        run: |
+          $account_id = "${{ needs.parse_inputs.outputs.account_id }}"
+          $region = "${{ needs.parse_inputs.outputs.region }}"
+
+          $env_tag = "${{ needs.parse_inputs.outputs.env_tag }}"
+          $oseries_usage = "${{ needs.parse_inputs.outputs.oseries_usage }}"
+          $pod_id = "${{ needs.parse_inputs.outputs.pod_id }}"
+
+          $filters = @("Name=tag:Environment,Values=$env_tag", "Name=tag:OSeriesUsage,Values=$oseries_usage")
+          if (-not [string]::IsNullOrWhiteSpace($pod_id)) {
+            $filters += "Name=tag:OSeriesPodId,Values=$pod_id"
+          }
+          Write-Host "Filters: $($filters -join ' ')"
+          $json_asg_names = $(aws autoscaling describe-auto-scaling-groups `
+            --region $region `
+            --filters $filters `
+            --output json | ConvertFrom-Json).AutoScalingGroups.AutoScalingGroupName | ConvertTo-Json -AsArray -Compress
+          Write-Host "json_asg_names=$json_asg_names"
+          echo "json_asg_names=$json_asg_names" >> $env:GITHUB_OUTPUT
+  execute_instance_refresh:
+    name: ${{ matrix.asg_name }} Refresh ${{ needs.parse_inputs.outputs.region}} ${{ needs.parse_inputs.outputs.env_tag}} P${{ needs.parse_inputs.outputs.pod_id}} ${{ needs.parse_inputs.outputs.oseries_usage}}
+    # WARN: New ASG will create new environments, please be sure to double-check that BRANCH PROTECTIONS are created for all (Production|Recovery|Stage) environments. (Required Reviewers: CPS, SRE. For (Production|Recovery), prevent self-review, limit to PCC-* branches)
+    environment: ${{ needs.parse_inputs.outputs.env_tag}}|${{ matrix.asg_name }}.${{ needs.parse_inputs.outputs.oseries_usage}}[${{ needs.parse_inputs.outputs.region}}]/push|instance_refresh
+    if: needs.gather_asg_data.outputs.json_asg_names !='[]' && needs.gather_asg_data.outputs.json_asg_names !='[null]' && needs.gather_asg_data.outputs.json_asg_names !='null' && needs.gather_asg_data.outputs.json_asg_names !='' && needs.gather_asg_data.outputs.json_asg_names !='""' && needs.gather_asg_data.outputs.json_asg_names !='[]' && needs.gather_asg_data.outputs.json_asg_names !='[""]' && needs.gather_asg_data.outputs.json_asg_names !='["null"]' && needs.gather_asg_data.outputs.json_asg_names !='["[]"]'
+    needs: [parse_inputs, gather_asg_data]
+    runs-on: [self-hosted, Linux, Standard, X64]
+    # NOTE: Cannot update to new container until we resolve `GLIBC_2.27' not found
+    # container:
+    #   image: docker.binrepo.vtxdev.net/cloud-base-images/immutable-build:latest
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        asg_name: ${{ fromJson(needs.gather_asg_data.outputs.json_asg_names) }}
+    steps:
+      - name: Install AWS CLI v2
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          rm /tmp/awscliv2.zip
+          sudo /tmp/aws/install --update
+          rm -rf /tmp/aws/
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4.0.2
+        with:
+          aws-region: ${{ needs.parse_inputs.outputs.region }}
+          role-external-id: ${{ secrets.ORG_RUNNER_AWS_EXTERNALID }}
+          role-skip-session-tagging: true
+          role-session-name: asg-instance-refresh
+          role-to-assume: ${{ needs.parse_inputs.outputs.role_arn }}
+          role-duration-seconds: 3600
+
+      - name: Check Instance Refresh
+        id: check_instance_refresh
+        run: |
+          region="${{ needs.parse_inputs.outputs.region}}"
+          asg_name="${{ matrix.asg_name }}"
+
+          describe_refresh=$(aws autoscaling describe-instance-refreshes \
+          --region $region \
+          --max-records 1 \
+          --auto-scaling-group-name $asg_name)
+
+          refresh_status=$(echo $describe_refresh | jq -r '.InstanceRefreshes[0].Status')
+          status_reason=$(echo $describe_refresh | jq -r '.InstanceRefreshes[0].StatusReason')
+
+          #if null, or the word null, set to Successful...
+          if [[ -z "$refresh_status" || "$refresh_status" == "null" ]]; then
+            echo "refresh_status: $refresh_status, setting to Successful..."
+            refresh_status='Successful'
+            status_reason='No Instance Refresh status was available.'
+          fi
+
+          echo "$asg_name Refresh Status: $refresh_status, Reason: $status_reason"
+
+      - name: Execute Instance Refresh
+        id: execute_instance_refresh
+        run: |
+          region="${{ needs.parse_inputs.outputs.region}}"
+          asg_name="${{ matrix.asg_name }}"
+
+          refresh_data=$(aws autoscaling start-instance-refresh \
+          --region $region \
+          --auto-scaling-group-name $asg_name \
+          --preferences "{\"SkipMatching\": false }")
+
+          refresh_id=$(echo $refresh_data | jq -r '.InstanceRefreshId')
+          echo "Instance Refresh Id:$refresh_id"
+
+          refresh_is_complete=false
+          active_statuses=('Pending' 'InProgress' 'Cancelling' 'RollbackInProgress')
+          timeout_secs=3600
+          cooldown_secs=30
+          max_run_time=$(( $(date +%s) + timeout_secs ))
+
+          while [[ "$refresh_is_complete" == false ]]
+          do
+            echo "-"
+            sleep_time=$((cooldown_secs + $RANDOM %31))
+            echo "Pausing Polling for $sleep_time seconds..."
+            sleep $sleep_time
+            echo "Pause complete. Polling instance refresh status."
+            echo "-"
+
+            describe_refresh=$(aws autoscaling describe-instance-refreshes \
+            --region $region \
+            --auto-scaling-group-name $asg_name \
+            --instance-refresh-ids $refresh_id)
+
+            refresh_status=$(echo $describe_refresh | jq -r '.InstanceRefreshes[0].Status')
+            status_reason=$(echo $describe_refresh | jq -r '.InstanceRefreshes[0].StatusReason')
+
+            #if null, or the word null, set to Pending...
+            if [[ -z "$refresh_status" || "$refresh_status" == "null" ]]; then
+              echo "refresh_status: $refresh_status, setting to Pending..."
+              refresh_status='Pending'
+              status_reason='No Instance Refresh status was available.'
+            fi
+
+            echo "$asg_name Refresh Status: $refresh_status, Reason: $status_reason"
+
+            #if status is not an active status, end loop
+            refresh_is_complete=$([[ $(echo ${active_statuses[@]} | grep -w $refresh_status) ]] && echo "false" || echo "true")
+
+            #if refresh_is_complete log
+            if [[ "$refresh_is_complete" == true ]]; then
+              echo "Instance Refresh completed. Exiting loop..."
+            fi
+
+            #if time has ellapsed, log and end loop
+            if [[ $(date +%s) -gt $max_run_time ]]; then
+              echo "Max refresh polling time has ellapsed. Exiting loop..."
+              refresh_is_complete=true
+            fi
+          done
