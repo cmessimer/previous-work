@@ -1,4 +1,7 @@
 #Execute script in AWS Systems Manager and specify the target instance during execution of document
+#or
+#via AWS CLI
+# aws ssm send-command --document-name "Name_of_Your_Document" --targets "Key=instanceids,Values=i-1234567890abcdef0" --parameters '{}'
 
 {
   "schemaVersion": "2.2",
