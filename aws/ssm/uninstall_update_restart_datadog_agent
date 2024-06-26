@@ -1,10 +1,12 @@
+#Execute script in AWS Systems Manager and specify the target instance during execution of document
+
 {
   "schemaVersion": "2.2",
   "description": "Uninstall current Datadog agent, Install version 7.54.0, and Restart Datadog Agent",
   "mainSteps": [
     {
       "action": "aws:runPowerShellScript",
-      "name": "updateDatadogAgent",
+      "name": "updateDatadogAgent", #
       "inputs": {
         "runCommand": [
           "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
