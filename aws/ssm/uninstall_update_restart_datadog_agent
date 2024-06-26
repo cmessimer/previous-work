@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Uninstall current Datadog agent, Install version 7.54.0, and Restart Datadog Agent",
+  "mainSteps": [
+    {
+      "action": "aws:runPowerShellScript",
+      "name": "updateDatadogAgent",
+      "inputs": {
+        "runCommand": [
+          "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
+          "Write-Host 'Stopping Datadog Agent if it exists...'",
+          "if (Get-Service -Name 'DatadogAgent' -ErrorAction SilentlyContinue) {",
+          "  Stop-Service -Name DatadogAgent -Force",
+          "  Write-Host 'Datadog Agent stopped.'",
+          "} else {",
+          "  Write-Host 'Datadog Agent service not found, skipping stop service step.'",
+          "}",
+          "Write-Host 'Uninstalling current Datadog Agent if installed...'",
+          "$productCode = (@(Get-ChildItem -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall' -Recurse) | Where-Object {$_.GetValue('DisplayName') -like 'Datadog Agent'}).PSChildName",
+          "if ($productCode) {",
+          "  start-process msiexec -Wait -ArgumentList '/log C:\\uninst.log /q /x', $productCode, 'REBOOT=ReallySuppress'",
+          "  Write-Host 'Current Datadog Agent uninstalled.'",
+          "} else {",
+          "  Write-Host 'Datadog Agent not found in installed programs, skipping uninstall step.'",
+          "}",
+          "Write-Host 'Downloading and installing Datadog Agent version 7.54.0...'",
+          "$latestVersionUrl = 'https://s3.amazonaws.com/ddagent-windows-stable/ddagent-cli-7.54.0.msi'",
+          "Invoke-WebRequest -Uri $latestVersionUrl -OutFile 'C:\\ProgramData\\Datadog\\ddagent-cli-7.54.0.msi'",
+          "Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i C:\\ProgramData\\Datadog\\ddagent-cli-7.54.0.msi /quiet' -Wait",
+          "Write-Host 'Datadog Agent version 7.54.0 installed.'",
+          "Write-Host 'Starting Datadog Agent...'",
+          "Start-Service -Name DatadogAgent",
+          "Write-Host 'Datadog Agent started.'"
+        ]
+      }
+    }
+  ]
+}
