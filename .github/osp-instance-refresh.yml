@@ -41,7 +41,7 @@ on:
 
 env:
   CHECKOUT_REF: ${{ inputs.repo-checkout-ref == '' && github.ref || inputs.repo-checkout-ref }}
-  CHECKOUT_REPO: "vertexinc/sre-o-series-proxy-infrastructure"
+  CHECKOUT_REPO: "xinc/sre-o-series-proxy-infrastructure"
   CHECKOUT_PATH: "sre-o-series-proxy-infrastructure"
   CHECKOUT_TOKEN: ${{ secrets.ORG_LEVEL_ACTION_PAT }}
   REGION: "${{ github.event.inputs.region }}"
