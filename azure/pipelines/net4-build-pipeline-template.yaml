@@ -1,1 +1,114 @@
-#
+name: '$(Date:yy.)$(Date:MM.)$(Date:dd.)$(rev:rr)_$(SourceBranchName)'
+
+trigger:
+  branches:
+    include:
+    - main
+
+pool:
+  vmImage: 'windows-2019'
+
+parameters:
+- name: overwrite
+  type: boolean
+  default: false
+- name: publishWebProjects
+  type: boolean
+  default: false
+- name: projectFile
+  type: string
+  default: CreateINFATrigger/CreateINFATrigger.csproj
+- name: solution
+  type: string
+  default: CreateINFATrigger/CreateINFATrigger.sln
+- name: nugetFeed
+  type: string
+  default: 59388b54-2798-4d11-b0d7-a731a1308e1e
+- name: 'buildArgs'
+  type: string
+  default: /p:Configuration=Release -m
+- name: testProject
+  type: string
+  default: '**/*.Tests.csproj'
+- name: 'publishPath'
+  type: string
+  default: $(Build.ArtifactStagingDirectory)
+- name: artifactName
+  type: string
+  default: drop
+- name: dotnetVersion
+  type: string
+  default: net48
+
+stages:
+
+  - stage: Build
+    displayName: "Build and Test Stage"
+      
+    jobs:
+      - job: Build
+        displayName: 'Build .NET Framework 4.8.0 Solution'
+        steps:
+
+        # Clear NuGet Cache
+          - script: nuget locals all -clear
+            displayName: 'Clear NuGet Cache' 
+
+          # Restore NuGet packages using NuGetCommand@2
+          - task: NuGetCommand@2
+            displayName: 'Restore NuGet packages'
+            inputs:
+              restoreSolution: ${{ parameters.solution }}
+              feedsToUse: 'select'
+              vstsFeed: ${{ parameters.nugetFeed }}
+
+          # Build the solution using VSBuild
+          - task: VSBuild@1
+            displayName: 'Build .NET Framework 4.8.0 Solution'
+            inputs:
+              solution: ${{ parameters.solution }}
+              msbuildArgs: '/p:Configuration=Release /p:TargetFramework=net48'
+              platform: 'Any CPU'
+              configuration: 'Release'
+              vsVersion: '16.0'
+
+          # Publish the solution using VSBuild@1 for .NET Framework compatibility
+          - task: VSBuild@1
+            displayName: 'Publish .NET Framework Project'
+            inputs:
+              solution: ${{ parameters.solution }}
+              msbuildArgs: '/p:Configuration=Release /p:OutDir=${{ parameters.publishPath }}'
+              platform: 'Any CPU'
+              configuration: 'Release'
+              vsVersion: '16.0'
+
+          # Publish the build artifact
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Build Artifacts'
+            inputs:
+              targetPath: ${{ parameters.publishPath }}
+              artifactName: ${{ parameters.artifactName }}
+          
+  - stage: CopyFiles
+    displayName: 'Copy Files Stage'
+    jobs:
+      - job: Copy_Job
+        displayName: 'Copy Files to Target Directory'
+        pool:
+          name: 'EDI Agent Pool'
+        steps:
+          # Download the Build Artifacts from the previous stage
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Build Artifacts'
+            inputs:
+              artifactName: ${{ parameters.artifactName }}
+              targetPath: $(Build.ArtifactStagingDirectory)
+          - task: CopyFiles@2
+            displayName: 'Copy Files'
+            inputs:
+              SourceFolder: $(Build.ArtifactStagingDirectory)
+              Contents: '**'
+              TargetFolder: \\swediuap4001\EDI\TEST_MESSIMER_PIPELINES_DEPLOY\CreateINFATrigger
+              OverWrite: $(overwrite)
+              flattenFolders: false
+            continueOnError: false
