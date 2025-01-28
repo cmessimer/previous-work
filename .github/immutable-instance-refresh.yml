@@ -63,7 +63,7 @@ on:
         type: string
 env:
   CHECKOUT_REF: ${{ inputs.repo-checkout-ref || github.ref  }}
-  CHECKOUT_REPO: "vertexinc/vcd-immutable-oseries"
+  CHECKOUT_REPO: "xinc/vcd-immutable-oseries"
   CHECKOUT_PATH: "vcd-immutable-oseries"
   CHECKOUT_TOKEN: ${{ secrets.ORG_LEVEL_ACTION_PAT }}
 jobs:
