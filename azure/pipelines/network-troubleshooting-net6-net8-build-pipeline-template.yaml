@@ -1,1 +1,177 @@
 #
+name: '$(Date:yy.)$(Date:MM.)$(Date:dd.)$(rev:rr)_$(SourceBranchName)'
+
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  solution: '**/*.sln'
+  outputDir: '$(Build.ArtifactStagingDirectory)'
+
+parameters:
+- name: DotNetVersion
+  default: net6.0
+  values:
+  - net6.0
+  - net8.0
+- name: overwrite
+  type: boolean
+  default: false
+- name: publishWebProjects
+  type: boolean
+  default: false
+- name: projectFile
+  type: string
+  default: app_name/app_name.csproj
+- name: solution
+  type: string
+  default: app_name/app_name.sln
+- name: nugetFeed
+  type: string
+  default: 59388b54-2798-4d11-b0d7-a731a1308e1e
+- name: buildArgs
+  type: string
+  default: /p:Configuration=Release -m
+- name: testProject
+  type: string
+  default: '**/*.Tests.csproj'
+- name: publishPath
+  type: string
+  default: $(Build.ArtifactStagingDirectory)
+- name: artifactName
+  type: string
+  default: drop
+- name: buildConfiguration
+  type: string
+  default: Release
+- name: outputDir
+  type: string
+  default: $(Build.ArtifactStagingDirectory)
+
+
+stages:
+
+- stage: Build
+  displayName: 'Build Stage'
+  jobs:
+    - job: BuildAndTest
+      displayName: 'Build, Test, and Publish .NET Application'
+      steps:
+            
+        # Clear NuGet Cache
+        - script: nuget locals all -clear
+          displayName: 'Clear NuGet Cache'
+
+        # Restore NuGet Packages
+        - task: DotNetCoreCLI@2
+          displayName: 'Restore NuGet Packages'
+          inputs:
+            projects: ${{ parameters.solution }}
+            feedsToUse: 'select'
+            vstsFeed: ${{ parameters.nugetFeed }}
+
+        # Build the Solution
+        - task: DotNetCoreCLI@2
+          displayName: 'Build Solution'
+          inputs:
+            command: build
+            projects: ${{ parameters.solution }}
+            arguments: '--configuration ${{ parameters.buildConfiguration }}'
+
+        # Publish the Project
+        - task: DotNetCoreCLI@2
+          displayName: 'Publish Project'
+          inputs:
+            command: publish
+            projects: ${{ parameters.solution }}
+            arguments: '--configuration ${{ parameters.buildConfiguration }} --output ${{ parameters.outputDir }} -f ${{ parameters.DotNetVersion }}'
+            publishWebProjects: false
+
+        # Publish Artifacts
+        - task: PublishPipelineArtifact@1
+          displayName: 'Publish Build Artifacts'
+          inputs:
+            targetPath: ${{ parameters.publishPath }}
+            artifactName: ${{ parameters.artifactName }}
+
+- stage: CopyFiles
+  displayName: 'Copy Files Stage'
+  jobs:
+    - job: Troubleshooting
+      displayName: Troublshooting Agent Connectivity
+      pool: 'EDI Agent Pool'
+      steps:
+        # PowerShell: Test Agent Connectivity
+        - task: PowerShell@2
+          displayName: 'Test Agent Connectivity'
+          condition: always()
+          inputs:
+            targetType: inline
+            script: |
+              Write-Host "Testing connectivity to EDI on-prem agent..."
+              $result = Test-NetConnection -ComputerName server_name -Port 445
+              if (-not $result.TcpTestSucceeded) {
+                Write-Error "ERROR: Unable to reach server_name on port 445"
+                exit 1
+              } else {
+                Write-Host "SUCCESS: Connectivity test passed."
+              }
+
+        # CmdLine: Troubleshoot Network Share
+        - task: CmdLine@2
+          displayName: 'Troubleshoot Network Share'
+          inputs:
+            script: |
+              echo Starting troubleshooting for \\server_name...
+              REM ping test
+              ping server_name -n 3
+              if errorlevel 1 (
+                  echo ERROR: Server server_name is not reachable.
+                  exit /b 1
+              ) else (
+                  echo SUCCESS: Server server_name is reachable.
+              )
+              REM Checks available shares
+              net view \\server_name > shares.txt 2>&1
+              findstr /i "EDI" shares.txt >nul
+              if errorlevel 1 (
+                  echo ERROR: Share does not exist or is not accessible.
+                  exit /b 1
+              ) else (
+                  echo SUCCESS: Share is available on server_name.
+              )
+              REM Access Test
+              net use \\server_name >nul 2>&1
+              if errorlevel 1 (
+                  echo ERROR: Unable to access \\server_name. Check service account permissions.
+                  exit /b 1
+              ) else (
+                  echo SUCCESS: Successfully accessed \\server_name.
+              )
+
+    - job: Copy_Job
+      displayName: 'Copy Files to Target Directory'
+      pool:
+        name: 'EDI Agent Pool'
+      steps:
+        # Download the Build Artifacts from the previous stage
+        - task: DownloadPipelineArtifact@2
+          displayName: 'Download Build Artifacts'
+          inputs:
+            artifactName: ${{ parameters.artifactName }}
+            targetPath: ${{ parameters.publishPath }}
+        - task: CopyFiles@2
+          displayName: 'Copy Files'
+          inputs:
+            SourceFolder: $(Build.ArtifactStagingDirectory)
+            Contents: '**'
+            TargetFolder: \\server_name\app_name\app_name
+            OverWrite: $(overwrite)
+            flattenFolders: false
+          continueOnError: false
