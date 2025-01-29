@@ -22,10 +22,10 @@ parameters:
   default: false
 - name: projectFile
   type: string
-  default: INFA_ECMAP_BC_Calls/INFA_ECMAP_BC_Calls.csproj
+  default: app_name/app_name.csproj
 - name: solution
   type: string
-  default: INFA_ECMAP_BC_Calls/INFA_ECMAP_BC_Calls.sln
+  default: app_name/app_name.sln
 - name: nugetFeed
   type: string
   default: 59388b54-2798-4d11-b0d7-a731a1308e1e
@@ -98,7 +98,7 @@ stages:
     - job: Copy_Job
       displayName: 'Copy Files to Target Directory'
       pool:
-        name: 'EDI Agent Pool'
+        name: 'Agent Pool'
       steps:
         # Download the Build Artifacts from the previous stage
         - task: DownloadPipelineArtifact@2
@@ -111,7 +111,7 @@ stages:
           inputs:
             SourceFolder: ${{ parameters.publishPath }}
             Contents: '**'
-            TargetFolder: \\swediuap4001\EDI\TEST_MESSIMER_PIPELINES_DEPLOY\INFA_ECMAP_BC_Calls
+            TargetFolder: \\server_name\TEST_MESSIMER_PIPELINES_DEPLOY\APP_NAME
             OverWrite: $(overwrite)
             flattenFolders: false
           continueOnError: false
