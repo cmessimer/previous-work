@@ -111,7 +111,7 @@ stages:
           inputs:
             SourceFolder: ${{ parameters.publishPath }}
             Contents: '**'
-            TargetFolder: \\server_name\TEST_MESSIMER_PIPELINES_DEPLOY\APP_NAME
+            TargetFolder: \\SERVER_NAME\TEST_MESSIMER_PIPELINES_DEPLOY\APP_NAME
             OverWrite: $(overwrite)
             flattenFolders: false
           continueOnError: false
