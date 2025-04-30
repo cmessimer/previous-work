@@ -1,0 +1,221 @@
+name: '$(Date:yy.)$(Date:MM.)$(Date:dd.)$(rev:rr)_$(SourceBranchName)'
+
+trigger:
+  branches:
+    include:
+    - master
+    - release
+  paths:
+    exclude:
+    - azure-pipelines/*
+
+pool:
+  vmImage: 'windows-latest'
+
+resources:
+  repositories:
+  - repository: templates
+    type: git
+    name: YAMLTemplates
+    ref: refs/heads/eus2
+  - repository: AzureResourceTemplates
+    type: git
+    name: AzureResourceTemplates
+    ref: refs/heads/eus2
+    trigger:
+      branches:
+        include:
+        - eus2
+      paths:
+        include: 
+        - ApiManagement/UPMCHP/Infrastructure/modules/apis/ClaimEntry  
+
+variables:
+- group: EUS2 - Azure Environment - NONPRD
+- name: microserviceName
+  value: 'ClaimEntry'
+- name: system.debug
+  value: true
+- name: ARMServiceConnection
+  value: 'AzureDevOps-SP-HPSRD'
+- name: SubscriptionID
+  value: '$8d20bb4e-05ba-4ef6-99b2-5e8309b2be95'
+- name: hasAzureSQLDatabase
+  value: false
+- name: buildConfiguration
+  value: 'release'
+- name: PathsToExclude
+  value: ''
+- name: CxSvcAcctUserName
+  value: ''
+- name: includeAPIM
+  value: true
+
+jobs:
+
+# Debug Variables Job
+- job: OutputVariables
+  displayName: 'Output All Pipeline Variables'
+  steps:
+    - checkout: none
+
+    - task: PowerShell@2
+      displayName: 'Dump environment variables'
+      inputs:
+        targetType: inline
+        script: |
+          Write-Host "##[group]Environment Variables"
+          Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
+            Write-Host "$($_.Name) = $($_.Value)"
+          }
+          Write-Host "##[endgroup]"
+
+# Output Defined Variables
+- job: OutputDefinedVariables
+  displayName: 'Output Selected Pipeline Variables'
+  steps:
+    - checkout: none
+
+    - task: PowerShell@2
+      displayName: 'Echo selected pipeline variables'
+      inputs:
+        targetType: inline
+        script: |
+          Write-Host "##[group]Pipeline Variables Defined in YAML"
+          Write-Host "microserviceName = $env:microserviceName"
+          Write-Host "system.debug = $env:system_debug"
+          Write-Host "ARMServiceConnection = $env:ARMServiceConnection"
+          Write-Host "SubscriptionID = $env:SubscriptionID"
+          Write-Host "hasAzureSQLDatabase = $env:hasAzureSQLDatabase"
+          Write-Host "buildConfiguration = $env:buildConfiguration"
+          Write-Host "PathsToExclude = $env:PathsToExclude"
+          Write-Host "CxSvcAcctUserName = $env:CxSvcAcctUserName"
+          Write-Host "includeAPIM = $env:includeAPIM"
+          Write-Host "##[endgroup]"
+
+- job: Get_Create_And_Add_MI_To_Group
+  displayName: 'Get/Create Managed Identities and Add to Security Groups'
+  pool:
+    vmImage: 'windows-latest'
+  steps:
+    - checkout: self
+    - task: AzureCLI@2
+      displayName: 'Loop Through Environments: Get/Create MI and Add to Group'
+      inputs:
+        azureSubscription: '$(ARMServiceConnection)'
+        scriptType: 'pscore'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          $envConfigs = @(
+            @{ Name = "dev";   AppManifest = "ApplicationManifest.dev.xml";    ResourceGroup = "HPSRD-EUS2-RG-NONPRD-SFC"; SubscriptionId = "8d20bb4e-05ba-4ef6-99b2-5e8309b2be95"; Location = "eastus2";  Group = "HPSRD-EUS2-SQLSRV-DEV-MICROSERVICES-Configuration-READ" },
+            @{ Name = "test";  AppManifest = "ApplicationManifest.test.xml";   ResourceGroup = "HPSRD-EUS2-RG-NONPRD-SFC"; SubscriptionId = "8d20bb4e-05ba-4ef6-99b2-5e8309b2be95"; Location = "eastus2";  Group = "HPSRD-EUS2-SQLSRV-TST-MICROSERVICES-Configuration-READ" },
+            @{ Name = "stage"; AppManifest = "ApplicationManifest.staging.xml";ResourceGroup = "HPSRD-EUS2-RG-STG-SFC";    SubscriptionId = "8d20bb4e-05ba-4ef6-99b2-5e8309b2be95"; Location = "eastus2";  Group = "HPSRD-EUS2-SQLSRV-STG-MICROSERVICES-Configuration-READ" },
+            @{ Name = "prod";  AppManifest = "ApplicationManifest.prod.xml";   ResourceGroup = "HPSRP-EUS2-RG-PRD-SFC";    SubscriptionId = "c70ba670-7c11-4c10-a83e-4d2f7903cdb4"; Location = "eastus2";  Group = "HPSRP-EUS2-SQLSRV-PRD-MICROSERVICES-Configuration-READ" }
+          )
+
+          $artifactPath = "D:\a\1\s/ClaimEntry.WebApi/ConfigTransforms"
+          $summary = @()
+
+          Write-Host "========== Listing Available AAD Security Groups =========="
+          $aadGroups = az ad group list --query "[].{DisplayName:displayName, ObjectId:id}" | ConvertFrom-Json
+          if ($aadGroups) {
+            $aadGroups | Sort-Object DisplayName | ForEach-Object {
+              Write-Host "Group: $($_.DisplayName) (ID: $($_.ObjectId))"
+            }
+          } else {
+            Write-Warning "No AAD groups found or access issue listing groups!"
+          }
+          Write-Host "==========================================================="
+
+          foreach ($cfg in $envConfigs) {
+            Write-Host "============================"
+            Write-Host "Processing environment: $($cfg.Name)"
+            $manifestPath = Join-Path $artifactPath $cfg.AppManifest
+
+            if (-Not (Test-Path -Path $manifestPath)) {
+              Write-Warning "Manifest file not found for $($cfg.Name): $manifestPath"
+              continue
+            }
+
+            [xml]$manifest = Get-Content -Path $manifestPath
+            $miName = $manifest.ApplicationManifest.Principals.ManagedIdentities.ManagedIdentity.Name
+            if (-not $miName) {
+              Write-Warning "No Managed Identity defined in manifest for $($cfg.Name)."
+              continue
+            }
+
+            Write-Host "Managed Identity name for $($cfg.Name): $miName"
+            az account set --subscription $cfg.SubscriptionId
+
+            $rgExists = az group exists --name $($cfg.ResourceGroup) | ConvertFrom-Json
+            if (-not $rgExists) {
+              Write-Warning "Resource group [$($cfg.ResourceGroup)] does not exist in [$($cfg.SubscriptionId)]."
+              $summary += [PSCustomObject]@{
+                Environment   = $cfg.Name
+                MIName        = $miName
+                ResourceGroup = $cfg.ResourceGroup
+                Exists        = $false
+                Status        = "Resource Group Not Found"
+                GroupAdd      = "Skipped"
+              }
+              continue
+            }
+
+            $mi = az identity show --name $miName --resource-group $cfg.ResourceGroup --only-show-errors --output json 2>$null
+            if ($mi) {
+              $miJson = $mi | ConvertFrom-Json
+              $miObjectId = $miJson.principalId
+              $status = "Already Exists"
+            } else {
+              $miJson = az identity create --name $miName --resource-group $cfg.ResourceGroup --location $cfg.Location --output json | ConvertFrom-Json
+              $miObjectId = $miJson.principalId
+              $status = "Created"
+            }
+
+            Write-Host "Managed Identity ObjectId: $miObjectId"
+
+            $groupName = $cfg.Group
+            $matchedGroup = $aadGroups | Where-Object { $_.DisplayName -eq $groupName }
+
+            if ($matchedGroup) {
+              $groupId = $matchedGroup.ObjectId
+              Write-Host "Found group $groupName with ID $groupId. Checking if SPN is owner..."
+
+              # Get current SPN object ID
+              $spnObjectId = az ad signed-in-user show --query objectId -o tsv
+              $owners = az ad group owner list --group $groupId | ConvertFrom-Json
+              $spnIsOwner = $owners | Where-Object { $_.objectId -eq $spnObjectId }
+
+              if (-not $spnIsOwner) {
+                Write-Warning "SPN is not an owner of the group '$groupId'. Cannot add members."
+                $groupAdd = "Skipped: SPN not group owner"
+              } else {
+                Write-Host "SPN is owner. Adding MI to group..."
+                $addResult = az ad group member add --group $groupId --member-id $miObjectId 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                  $groupAdd = "Added"
+                  Write-Host "Successfully added MI to AAD group"
+                } else {
+                  $groupAdd = "Failed: $addResult"
+                  Write-Warning "Failed to add MI to group: $addResult"
+                }
+              }
+            } else {
+              $groupAdd = "Group Not Found"
+              Write-Warning "AAD group '$groupName' not found among listed groups!"
+            }
+
+            $summary += [PSCustomObject]@{
+              Environment   = $cfg.Name
+              MIName        = $miName
+              ResourceGroup = $cfg.ResourceGroup
+              Exists        = $true
+              Status        = $status
+              Group         = $groupName
+              GroupAdd      = $groupAdd
+            }
+          }
+
+          Write-Host ""
+          Write-Host "====== Managed Identities & Group Membership Summary ======"
+          $summary | Format-Table -AutoSize | Out-String | Write-Host
